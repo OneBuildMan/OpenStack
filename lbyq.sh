@@ -2,7 +2,7 @@
 
 # Checking yq is present
 if ! which yq &>/dev/null; then
-    echo "yq is not present, the script will not run correctly without it. Exiting program..."
+    echo "yq is not present, the script will not run correctly without it. Exiting script..."
     exit 1
 fi
 
@@ -23,35 +23,25 @@ fi
 # Get info from each load balancer
 for lb_id in "${lb_ids[@]}"
 do
-    lb=$(openstack loadbalancer show "$lb_id" -f yaml)
-    lb_name=$(yq -r '.name' <<< "$lb")
-    lb_state=$(yq -r '.operating_status' <<< "$lb")
-    lb_provision_state=$(yq -r '.provisioning_status' <<< "$lb")
-    lb_ip=$(yq -r '.vip_address' <<< "$lb")
-    lb_members_pools=$(yq -r '.pools' <<< "$lb")
-    lb_project=$(yq -r '.project_id' <<< "$lb")
+    lb=$(openstack loadbalancer show "$lb_id" -f yaml | yq -r '.name, .operating_status, .provisioning_status, .vip_address, .pools, .project_id')
 
     # Get amphora details
-    amphora_id=$(openstack loadbalancer amphora list | grep "$lb_id" | awk '{print $2}')
+    amphora_id=$(openstack loadbalancer amphora list --loadbalancer $lb_id | awk 'NR>3 && $2 != "" {print $2}') #takes the first id it finds
     if [ -z "$amphora_id" ]
     then
         echo "Warning: Could not find an amphora associated with this LB"
     else
-        amphora=$(openstack loadbalancer amphora show "$amphora_id" -f yaml)
-        compute_id=$(yq -r '.compute_id' <<< "$amphora")
-        image_id=$(yq -r '.image_id' <<< "$amphora")
-        image=$(openstack image show "$image_id" -f json)
-        image_name=$(yq -r '.name' <<< "$image")
-        image_version=$(yq -r '.metadata.version' <<< "$image")
+        amphora=$(openstack loadbalancer amphora show "$amphora_id" -f yaml | yq -r '.compute_id, .image_id')
+        image=$(openstack image show "${amphora[1]}" -f yaml | yq -r '.properties.source_product_name, .properties.source_version_name')
     fi
 
     # Write to output file
     touch "$output_path"
     {
-        printf "id: %s\nname: %s\noperating_status: %s\nprovisioning_status: %s\nvip_address: %s\npools: %s\nproject_id: %s\n\n" \
-            "$lb_id" "$lb_name" "$lb_state" "$lb_provision_state" "$lb_ip" "$lb_members_pools" "$lb_project"
-        printf "Amphora\ncompute_id: %s\nimage_id: %s\nversion: %s\nname: %s\n\n" \
-            "$compute_id" "$image_id" "$image_version" "$image_name"
+        printf "LB\nid: %s\nname: %s\noperating_status: %s\nprovisioning_status: %s\nvip_address: %s\npools: %s\nproject_id: %s\n\n" \
+            $lb_id ${lb[0]} ${lb[1]} ${lb[2]} ${lb[3]} ${lb[4]} ${lb[5]}
+        printf "Amphora\ncompute_id: %s\nimage_id: %s\nimage version: %s\nimage name: %s\n\n" \
+            ${amphora[0]} ${amphora[1]} ${image[1]} ${image[0]}
     } >> "$output_path"
 done
 
